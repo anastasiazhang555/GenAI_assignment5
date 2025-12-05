@@ -1,16 +1,54 @@
 [project]
-name = "sps-genai"
+name = "GenAI_Assignment5"
 version = "0.1.0"
-description = "Add your description here"
+description = "Text generation API with baseline, RNN, and fine-tuned GPT-2 models for the SPS GENAI course."
 readme = "README.md"
 requires-python = ">=3.12"
+
+# Optional but good practice
+authors = [
+    { name = "Jiayin Zhang" }
+]
+
+license = { text = "Proprietary – for course use only" }
+
+keywords = [
+    "genai",
+    "fastapi",
+    "nlp",
+    "text-generation",
+    "gpt2",
+]
+
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Framework :: FastAPI",
+    "Intended Audience :: Education",
+    "License :: Other/Proprietary License",
+]
+
 dependencies = [
+    "datasets>=4.4.1",
     "fastapi[standard]>=0.117.1",
+    "pydantic>=2.11.9",
     "spacy>=3.8.7",
+    "torch>=2.9.1",
+    "transformers>=4.57.3",
     "uvicorn[standard]>=0.36.0",
 ]
 
+[project.optional-dependencies]
+# You can install these with: `uv sync --extra dev`
+dev = [
+    "pytest>=8.3.0",   # for tests
+    "httpx>=0.27.0",   # to call your API in tests
+    "ruff>=0.7.0",     # code style / linting
+]
+
 [tool.uv.workspace]
+# Keep this if your project root directory is named "sps_genai"
+# (which it looks like from your terminal prompt).
 members = [
     "sps_genai",
 ]

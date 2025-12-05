@@ -1,54 +1,107 @@
 from typing import List
+
+import torch
+import numpy as np
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
-from bigram_model import BigramModel
 
-import spacy
-import numpy as np
+from app.rnn_model import LSTMModel
+from app.llm_model import generate_with_llm
 
-import spacy
-import numpy as np
-
-app = FastAPI(title="Text Gen + Embeddings API")
+# ---------- FastAPI init ----------
+app = FastAPI(title="Text Generation + Embeddings API (RNN / LLM Version)")
 
 
-# ---------- Bigram Model ----------
+# ---------- Corpus for RNN ----------
 corpus = [
-	"The Count of Monte Cristo is a novel written by Alexandre Dumas. \
-It tells the story of Edmond Dantès, who is falsely imprisoned and later seeks revenge.",
-	"this is another example sentence",
-	"we are generating text based on bigram probabilities",
-	"bigram models are simple but effective"
+    "The Count of Monte Cristo is a novel written by Alexandre Dumas. "
+    "It tells the story of Edmond Dantès, who is falsely imprisoned and later seeks revenge.",
+    "this is another example sentence",
+    "we are generating text based on bigram probabilities",
+    "bigram models are simple but effective",
 ]
 
-bigram_model = BigramModel(corpus)
+# Build character-level vocabulary
+text = " ".join(corpus).lower()
+chars = sorted(list(set(text)))
+vocab_size = len(chars)
+char_to_idx = {ch: i for i, ch in enumerate(chars)}
+idx_to_char = {i: ch for i, ch in enumerate(chars)}
 
+# ---------- Initialize LSTM Model ----------
+device = "cuda" if torch.cuda.is_available() else "cpu"
+rnn_model = LSTMModel(vocab_size).to(device)
+rnn_model.eval()
+# If you have saved weights, you can load them here:
+# rnn_model.load_state_dict(torch.load("lstm_weights.pth", map_location=device))
+
+
+# ---------- API Schemas ----------
 class TextGenerationRequest(BaseModel):
-	start_word: str
-	length: int
+    start_word: str
+    length: int
+
 
 @app.get("/")
 def read_root():
-	return {"Hello": "World"}
+    return {"message": "Welcome to the Text Generation + Embedding API (RNN + GPT-2 LLM)"}
 
-@app.post("/generate")
-def generate_text(request: TextGenerationRequest):
-	generated_text = bigram_model.generate_text(request.start_word, request.length)
-	return {"generated_text": generated_text}
 
-# ---------- spaCy Word Embeddings ----------
-# Load the medium English model (make sure it's installed: en_core_web_md)
+# ---------- Text Generation with RNN ----------
+@app.post("/generate_with_rnn")
+def generate_with_rnn(request: TextGenerationRequest):
+    """
+    Generate text using the character-level LSTM model (Module 7).
+    """
+    if not request.start_word:
+        raise HTTPException(status_code=400, detail="start_word cannot be empty.")
+
+    start_char = request.start_word[0].lower()
+    if start_char not in char_to_idx:
+        raise HTTPException(status_code=400, detail=f"Character '{start_char}' not in vocabulary.")
+
+    generated = rnn_model.generate(
+        start_char=start_char,
+        length=request.length,
+        char_to_idx=char_to_idx,
+        idx_to_char=idx_to_char,
+        device=device,
+    )
+    return {"generated_text": generated}
+
+
+# ---------- Text Generation with fine-tuned GPT-2 LLM ----------
+@app.post("/generate_with_llm")
+def generate_with_llm_endpoint(request: TextGenerationRequest):
+    """
+    Generate text using the fine-tuned GPT-2 model (Module 9 / Assignment 5).
+    """
+    if not request.start_word:
+        raise HTTPException(status_code=400, detail="start_word cannot be empty.")
+
+    generated_text = generate_with_llm(request.start_word, request.length)
+    return {"generated_text": generated_text}
+
+
+# ---------- Optional: spaCy Word Embeddings ----------
+# We try to load spaCy, but we do NOT crash the whole app if the model is missing.
 try:
+    import spacy  # type: ignore
+
     nlp = spacy.load("en_core_web_md")
-except OSError as e:
-    raise RuntimeError(
-        "spaCy model 'en_core_web_md' not found. "
-        "Run: uv run python -m spacy download en_core_web_md"
-    ) from e
+    SPACY_AVAILABLE = True
+except Exception:
+    nlp = None
+    SPACY_AVAILABLE = False
+
 
 class EmbeddingRequest(BaseModel):
     word: str = Field(..., min_length=1, description="The word to embed")
-    use_doc_vector: bool = Field(default=False, description="If true, use doc vector (nlp(word)).vector")
+    use_doc_vector: bool = Field(
+        default=False,
+        description="If true, use doc vector (nlp(word)).vector instead of lexical vector.",
+    )
+
 
 class EmbeddingResponse(BaseModel):
     word: str
@@ -56,12 +109,16 @@ class EmbeddingResponse(BaseModel):
     has_vector: bool
     vector: List[float]
 
+
 def _get_word_vector(token_text: str, use_doc_vector: bool = False) -> tuple[np.ndarray, bool]:
     """
-    Returns a vector and has_vector flag.
-    - use_doc_vector=False: directly use vocab word vector
-    - use_doc_vector=True: use doc.vector (works for short phrases)
+    Helper to obtain a vector for a given token using spaCy, if available.
+    Returns (vector, has_vector).
     """
+    if not SPACY_AVAILABLE or nlp is None:
+        # Return a zero vector with flag False
+        return np.zeros(1, dtype="float32"), False
+
     if use_doc_vector:
         doc = nlp(token_text)
         vec = doc.vector
@@ -73,26 +130,53 @@ def _get_word_vector(token_text: str, use_doc_vector: bool = False) -> tuple[np.
         has_vec = bool(lex.has_vector and np.linalg.norm(vec) > 0)
         return vec, has_vec
 
-@app.get("/embed")
-def embed_get(word: str = Query(..., min_length=1), use_doc_vector: bool = False):
+
+@app.get("/embed", response_model=EmbeddingResponse)
+def embed_get(
+    word: str = Query(..., min_length=1),
+    use_doc_vector: bool = False,
+):
+    """
+    Get a single word embedding using spaCy, if the 'en_core_web_md' model is installed.
+    """
+    if not SPACY_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="spaCy model 'en_core_web_md' is not installed. "
+            "Run: uv run python -m spacy download en_core_web_md",
+        )
+
     vec, has_vec = _get_word_vector(word, use_doc_vector)
     if not has_vec:
         raise HTTPException(status_code=404, detail=f"No usable vector for '{word}' in current model.")
-    return {
-        "word": word,
-        "dim": int(vec.shape[0]),
-        "has_vector": has_vec,
-        "vector": vec.tolist()
-    }
+
+    return EmbeddingResponse(
+        word=word,
+        dim=int(vec.shape[0]),
+        has_vector=has_vec,
+        vector=vec.tolist(),
+    )
+
 
 @app.post("/embed", response_model=EmbeddingResponse)
 def embed_post(req: EmbeddingRequest):
+    """
+    Same as GET /embed but accepts a JSON body instead of query parameters.
+    """
+    if not SPACY_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="spaCy model 'en_core_web_md' is not installed. "
+            "Run: uv run python -m spacy download en_core_web_md",
+        )
+
     vec, has_vec = _get_word_vector(req.word, req.use_doc_vector)
     if not has_vec:
         raise HTTPException(status_code=404, detail=f"No usable vector for '{req.word}' in current model.")
+
     return EmbeddingResponse(
         word=req.word,
         dim=int(vec.shape[0]),
         has_vector=has_vec,
-        vector=vec.tolist()
+        vector=vec.tolist(),
     )

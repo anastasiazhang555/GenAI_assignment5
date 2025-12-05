@@ -1,10 +1,25 @@
-# Python-generated files
+# Python bytecode
 __pycache__/
-*.py[oc]
-build/
-dist/
-wheels/
-*.egg-info
+*.py[cod]
+*.pyo
 
 # Virtual environments
-.venv
+.venv/
+venv/
+env/
+
+# macOS system files
+.DS_Store
+
+# Model weights / checkpoints
+models/
+!models/.gitkeep
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
+# UV cache
+uv.lock
+
+# Logs
+*.log
